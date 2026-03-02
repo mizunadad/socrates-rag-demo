@@ -1,0 +1,10 @@
+streamlit
+firebase-admin
+sentence-transformers
+anthropic
+numpy
+pandas
+scikit-learn
+streamlit-agraph
+python-frontmatter
+pyYAML

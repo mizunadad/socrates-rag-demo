@@ -1,0 +1,23 @@
+# ==========================================
+# Socratic RAG Secret Rules (最重要：絶対に漏らさない)
+# ==========================================
+serviceAccountKey.json
+
+# 作業用・バックアップ（自分の試行錯誤を隠す場所）
+bkup/
+.firebase/
+.streamlit/
+functions/node_modules/
+
+# Pythonのゴミ（環境依存ファイルを排除する）
+__pycache__/
+.venv/
+venv/
+env/
+
+# OS生成ファイル (Mac/Windows)
+.DS_Store
+Thumbs.db
+
+# text 移動時のゴミファイル
+*:Zone.Identifier

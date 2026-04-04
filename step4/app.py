@@ -1,23 +1,30 @@
 """
-step3/app.py -- Phase 1: NewRAG Streamlit App (v6.1)
+step4/app.py -- Phase 3: MixedRAG Streamlit App (Multi-Domain)
+
+[FILE] step4/app.py
+NOTE: このファイルは Step 4（MixedRAG / Phase 3）のマルチドメイン対応版です。
+      最小構成版（NewRAG / Phase 1）は step3/app.py を参照してください。
+
+step3/app.py からの差分（4箇所のみ）:
+  1. DOMAIN_CONFIG: ドメインごとの設定を辞書で管理
+  2. TOPIC_ANCHORS: ドメインごとのアンカーテキスト
+  3. サイドバー: ドメイン選択UIを追加
+  4. Scope Guard: 選択ドメインに応じてアンカー・キーワードを動的切替
+
+設計のハイライト:
+  コードの変更は最小限。ドメインを追加するにはDOMAIN_CONFIGに
+  エントリを足すだけ。ロジックは触らない。
+  「コードを変えなくても、データとカテゴリ設定の追加だけで
+  マルチドメイン対応できる」ことを示す。
+
+Base: step3/app.py v6 (646 lines, Phase 1 verified)
+Model: claude-haiku-4-5-20251001 (migrated from retired claude-3-haiku-20240307)
 
 Changelog:
-  v1: Initial creation
-  v2: Fix secrets.toml, sources API contamination, add domain KW bypass
-  v3: Reorder Scope Guard (domain KW first, conversation bypass 10 chars)
-  v4: Fix L3 long response (level-aware prompts + stronger retry)
-      Fix mode switch notification (separate state tracking)
-  v5: Align with regenerated pipeline (build_vector_db_for_NewRAG v2)
-      Firestore fields: summary_section, analysis_section (not used by app yet)
-      No functional change; comment annotations only
-  v6: [Fix-01] System notification now displayed via st.info() in chat history
-      [Fix-02] Structural constraint: character limits -> sentence count limits
-               Post-processing normalizes trailing duplicate "？"
-      [Fix-03] L3 enforced as "1 sentence only" (structural > numerical)
-      [Fix-04] session_state.messages initialized before sidebar widgets
-               to stabilize first-message behavior
-  v6.1: MODEL_NAME constant (claude-haiku-4-5-20251001)
-        FORMAT_CONSTRAINT added (Haiku 4.5 Markdown suppression)
+  v1: Initial creation (multi-domain extension of step3 v6)
+  v1.1: MODEL_NAME constant + FORMAT_CONSTRAINT added
+        Haiku 4.5 produces longer, heavily Markdown-formatted responses.
+        FORMAT_CONSTRAINT addresses this at the prompt layer (preventive safety).
 """
 
 import re
@@ -32,17 +39,54 @@ import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
 
 # ==========================================
-# Settings
+# [DIFF-1] Domain Configuration
 # ==========================================
+# step3: 単一ドメイン（SWTest固定）
+# step4: 辞書でドメインを管理。追加は設定を足すだけ。
 
-TARGET_CATEGORIES = ["Strategy_Design", "Technology"]
+DOMAIN_CONFIG = {
+    "SWTest": {
+        "label": "🧪 ソフトウェアテスト哲学",
+        "categories": ["Strategy_Design", "Technology"],
+        "anchor": (
+            "ソフトウェアテスト、品質保証、テスト戦略、テストピラミッド、"
+            "境界値分析、シフトレフト、テスト自動化、品質管理、"
+            "テスト設計、バグ検出、回帰テスト、テスト工程、QA、"
+            "ソフトウェア品質、テストプロセス、検証と妥当性確認"
+        ),
+        "keywords": [
+            "テスト", "品質", "QA", "バグ", "不具合", "欠陥",
+            "シフトレフト", "境界値", "ピラミッド", "自動化",
+            "検証", "妥当性", "回帰", "リグレッション",
+            "カバレッジ", "ホワイトボックス", "ブラックボックス",
+            "単体テスト", "結合テスト", "受入テスト",
+            "ユニットテスト", "E2E", "CI", "CD",
+        ],
+        "scope_msg": "現在は『ソフトウェアテスト哲学』の時間です。",
+    },
+    "Singularity": {
+        "label": "🚀 Tech Singularity",
+        "categories": ["TECH_research"],
+        "anchor": (
+            "コンピュータ科学、人工知能(AI)、半導体工学、物理学、"
+            "ハードウェア、ソフトウェア開発、プログラミング、アルゴリズム、"
+            "シンギュラリティ、GPU、データセンター、エネルギー技術、"
+            "L0(物理層)、L1(知能層)、L2、L3、L4、アーキテクチャ、統合技術"
+        ),
+        "keywords": [
+            "AI", "人工知能", "半導体", "GPU", "シンギュラリティ",
+            "アーキテクチャ", "データセンター", "アルゴリズム",
+            "プログラミング", "ソフトウェア", "ハードウェア",
+            "物理層", "知能層", "L0", "L1", "L2", "L3", "L4",
+            "エネルギー", "コンピュータ", "機械学習", "深層学習",
+            "ニューラル", "トランスフォーマー", "推論", "学習",
+        ],
+        "scope_msg": "現在は『Tech Singularity』の時間です。",
+    },
+}
 
-TOPIC_ANCHOR_TEXT = (
-    "ソフトウェアテスト、品質保証、テスト戦略、テストピラミッド、"
-    "境界値分析、シフトレフト、テスト自動化、品質管理、"
-    "テスト設計、バグ検出、回帰テスト、テスト工程、QA、"
-    "ソフトウェア品質、テストプロセス、検証と妥当性確認"
-)
+# Default domain
+DEFAULT_DOMAIN = "SWTest"
 
 SCOPE_THRESHOLD = 0.15
 
@@ -57,25 +101,15 @@ FORMAT_CONSTRAINT = (
     "回答は400字程度を目安にしてください。"
 )
 
-DOMAIN_KEYWORDS = [
-    "テスト", "品質", "QA", "バグ", "不具合", "欠陥",
-    "シフトレフト", "境界値", "ピラミッド", "自動化",
-    "検証", "妥当性", "回帰", "リグレッション",
-    "カバレッジ", "ホワイトボックス", "ブラックボックス",
-    "単体テスト", "結合テスト", "受入テスト",
-    "ユニットテスト", "E2E", "CI", "CD",
-]
-
 SAFE_KEYWORDS = [
     "わから", "分から", "教えて", "ヒント", "正解", "答え",
     "ありがとう", "こんにちは", "続け", "はい", "いいえ",
 ]
 
-# [v6] Structural constraint: sentence count per level (replaces char limits)
-# "構造的制約 > 数量的制約" -- v1の教訓を適用
+# Structural constraint: sentence count per level
 LEVEL_SENTENCE_LIMITS = {1: 3, 2: 2, 3: 1}
 
-# [v6] Coaching prompts rewritten with sentence-count constraints
+# Coaching prompts (identical to step3 v6)
 COACHING_PROMPTS = {
     1: (
         "あなたは「ソクラテス式コーチ」です。\n"
@@ -109,7 +143,6 @@ COACHING_PROMPTS = {
     ),
 }
 
-# [v6] Retry constraints also use sentence-count language
 LEVEL_RETRY_CONSTRAINTS = {
     1: (
         "【再生成指示】ヒントを1つだけ添えて、"
@@ -146,17 +179,11 @@ TEACHER_PROMPT = (
 # ==========================================
 
 st.set_page_config(
-    page_title="Socratic RAG - Phase 1",
+    page_title="Socratic RAG - Multi-Domain",
     page_icon="🏛️",
     layout="centered",
 )
 
-# [v6/Fix-04] Initialize messages BEFORE sidebar widgets
-# to ensure session_state is stable on first run.
-# Streamlit reruns the entire script on every interaction;
-# placing this before widget rendering prevents the race
-# condition where first-message processing sees an
-# uninitialized state.
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -189,33 +216,42 @@ def load_embedding_model():
     return SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
 
 
+# [DIFF-2] Anchor embedding is now per-domain (not cached globally)
 @st.cache_data
-def get_anchor_embedding():
+def get_anchor_embedding(anchor_text):
     model = load_embedding_model()
-    return model.encode([TOPIC_ANCHOR_TEXT])
+    return model.encode([anchor_text])
 
 
 # ==========================================
-# Pre-hook: Scope Guard
+# Pre-hook: Scope Guard (domain-aware)
 # ==========================================
 
-def pre_hook_scope_guard(query, threshold=SCOPE_THRESHOLD):
+def pre_hook_scope_guard(query, domain_key, threshold=SCOPE_THRESHOLD):
     """
+    [DIFF-3] Domain-aware Scope Guard.
+    Uses the selected domain's keywords and anchor for validation.
+
     3-stage check (priority order):
       1. Domain keyword -> pass
       2. Ultra-short conversation (<=10 chars) -> pass
       3. Anchor vector similarity -> pass if above threshold
     """
+    config = DOMAIN_CONFIG.get(domain_key, DOMAIN_CONFIG[DEFAULT_DOMAIN])
+
     try:
-        if any(kw in query for kw in DOMAIN_KEYWORDS):
+        # Stage 1: Domain keywords (per-domain)
+        if any(kw in query for kw in config["keywords"]):
             return True, ""
 
+        # Stage 2: Safe conversation bypass
         if len(query) <= 10 and any(kw in query for kw in SAFE_KEYWORDS):
             return True, ""
 
+        # Stage 3: Vector similarity (per-domain anchor)
         model = load_embedding_model()
         query_vec = model.encode([query])
-        anchor_vec = get_anchor_embedding()
+        anchor_vec = get_anchor_embedding(config["anchor"])
 
         similarity = cosine_similarity(query_vec, anchor_vec)[0][0]
 
@@ -225,8 +261,7 @@ def pre_hook_scope_guard(query, threshold=SCOPE_THRESHOLD):
                 f"**{similarity:.4f}** < Threshold {threshold})*"
             )
             return False, (
-                "🚫 **Scope Guard**: 現在は"
-                "『ソフトウェアテスト哲学』の時間です。"
+                f"🚫 **Scope Guard**: {config['scope_msg']}"
                 "その話題は学習範囲外のようです。"
                 f"{debug_info}"
             )
@@ -237,44 +272,23 @@ def pre_hook_scope_guard(query, threshold=SCOPE_THRESHOLD):
 
 
 # ==========================================
-# Post-hook: Socratic Validation
+# Post-hook: Socratic Validation (unchanged from step3 v6)
 # ==========================================
 
 def _count_sentences(text):
-    """Count sentences by splitting on 。？?！! terminators.
-
-    Returns the number of sentence-ending punctuation marks found.
-    Consecutive identical terminators (e.g. ？？) are collapsed first.
-    """
-    # Collapse consecutive identical terminators
     collapsed = re.sub(r"([。？?！!])\1+", r"\1", text)
-    # Count terminators
     return len(re.findall(r"[。？?！!]", collapsed))
 
 
 def _normalize_trailing_question(text):
-    """[v6/Fix-02] Remove duplicate trailing ？ and clean whitespace.
-
-    "...ですか？？"  -> "...ですか？"
-    "...ですか。？"  -> "...ですか？"
-    "...ですか ？"   -> "...ですか？"
-    """
     text = text.rstrip()
-    # Remove trailing duplicate ？/? marks
     text = re.sub(r"[？?]+$", "？", text)
-    # If text ends with 。？ (statement + forced question), keep only ？
     text = re.sub(r"。？$", "？", text)
-    # Remove whitespace before final ？
     text = re.sub(r"\s+？$", "？", text)
     return text
 
 
 def socratic_validation(response_text, level=1):
-    """[v6] Structural validation: sentence count + question ending.
-
-    Replaces v4/v5 character-length validation with sentence-count check.
-    "構造的制約 > 数量的制約" principle.
-    """
     max_sentences = LEVEL_SENTENCE_LIMITS.get(level, 3)
     sentence_count = _count_sentences(response_text)
 
@@ -285,7 +299,6 @@ def socratic_validation(response_text, level=1):
         )
         return False, feedback
 
-    # Check question mark in last 10 chars
     tail = response_text[-10:]
     if "？" not in tail and "?" not in tail:
         feedback = (
@@ -298,10 +311,11 @@ def socratic_validation(response_text, level=1):
 
 
 # ==========================================
-# Vector Search
+# Vector Search (domain-aware categories)
 # ==========================================
 
-def search_documents(query, top_k=3):
+def search_documents(query, target_categories, top_k=3):
+    """[DIFF-4] target_categories is now a parameter, not a global."""
     db = setup_firestore()
     model = load_embedding_model()
     if not db or not model:
@@ -312,16 +326,9 @@ def search_documents(query, top_k=3):
 
     all_docs = []
     try:
-        # Firestore tech_docs field mapping (pipeline v2):
-        #   embedding        -> 384d vector (search)
-        #   content          -> full body (LLM context)
-        #   display_title    -> display name
-        #   category         -> domain filter
-        #   summary_section  -> extracted summary (future use)
-        #   analysis_section -> extracted analysis (future use)
         docs_ref = (
             db.collection("tech_docs")
-            .where("category", "in", TARGET_CATEGORIES)
+            .where("category", "in", target_categories)
             .stream()
         )
         for doc in docs_ref:
@@ -374,7 +381,37 @@ def main():
             help="ローカル実行時はここに入力。デプロイ時は Secrets に設定。",
         )
 
-    # Teacher / Coaching switch (v4: separate tracking for notification)
+    # [DIFF: Domain selection UI]
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📂 学習ドメイン")
+
+    if "current_domain" not in st.session_state:
+        st.session_state.current_domain = DEFAULT_DOMAIN
+
+    domain_options = list(DOMAIN_CONFIG.keys())
+    domain_labels = {k: v["label"] for k, v in DOMAIN_CONFIG.items()}
+
+    selected_domain = st.sidebar.radio(
+        "ドメインを選択:",
+        options=domain_options,
+        format_func=lambda x: domain_labels[x],
+        index=domain_options.index(st.session_state.current_domain),
+    )
+
+    # Domain change notification
+    if selected_domain != st.session_state.current_domain:
+        st.session_state.current_domain = selected_domain
+        config = DOMAIN_CONFIG[selected_domain]
+        st.session_state.messages.append({
+            "role": "system",
+            "content": (
+                f"【システム通知】学習ドメインが"
+                f"『{config['label']}』に変更されました。"
+                "検索対象とScope Guardが切り替わります。"
+            ),
+        })
+
+    # Teacher / Coaching switch
     st.sidebar.markdown("---")
     st.sidebar.subheader("学習スタイル")
 
@@ -394,7 +431,6 @@ def main():
         index=0 if st.session_state.chat_style == "Teacher" else 1,
     )
 
-    # Detect mode change via prev_chat_style
     if selected_style != st.session_state.prev_chat_style:
         st.session_state.chat_style = selected_style
         st.session_state.prev_chat_style = selected_style
@@ -437,14 +473,16 @@ def main():
         st.rerun()
 
     # --- Main area ---
-    st.title("🏛️ Socratic RAG: Phase 1")
+    current_domain = st.session_state.current_domain
+    config = DOMAIN_CONFIG[current_domain]
+
+    st.title("🏛️ Socratic RAG: Multi-Domain")
     st.caption(
-        "NewRAG（最小構成）による知識検索 + ソクラテス対話の検証"
+        f"MixedRAG ── 現在のドメイン: {config['label']}"
     )
 
     # Display history
     for msg in st.session_state.messages:
-        # [v6/Fix-01] System notifications displayed as st.info()
         if msg["role"] == "system":
             st.info(msg["content"])
             continue
@@ -463,15 +501,15 @@ def main():
         st.info("👈 サイドバーに API Key を入力してください。")
         return
 
-    prompt = st.chat_input(
-        "質問を入力してください（例: テストの本当の目的は？）"
-    )
+    prompt = st.chat_input("質問を入力してください")
 
     if not prompt:
         return
 
-    # 1. Pre-hook: Scope Guard
-    is_valid, error_msg = pre_hook_scope_guard(prompt)
+    # 1. Pre-hook: Scope Guard (domain-aware)
+    is_valid, error_msg = pre_hook_scope_guard(
+        prompt, current_domain
+    )
 
     if not is_valid:
         st.session_state.messages.append(
@@ -492,9 +530,13 @@ def main():
     with st.chat_message("user"):
         st.markdown(prompt)
 
-    # 2. RAG Search
+    # 2. RAG Search (domain-aware categories)
     with st.chat_message("assistant"):
-        results = search_documents(prompt, top_k=3)
+        results = search_documents(
+            prompt,
+            target_categories=config["categories"],
+            top_k=3,
+        )
 
         if not results:
             msg = (
@@ -540,7 +582,6 @@ def main():
             f"【参照データ】\n{context}"
         )
 
-        # API messages (strip sources and system role)
         messages_for_api = [
             {"role": m["role"], "content": m["content"]}
             for m in st.session_state.messages[-10:]
@@ -564,7 +605,6 @@ def main():
                         full_response + "▌"
                     )
 
-            # [v6/Fix-02] Normalize trailing ？ before validation
             if st.session_state.chat_style == "Coaching":
                 full_response = _normalize_trailing_question(
                     full_response
@@ -605,7 +645,6 @@ def main():
                         full_response = (
                             retry_response.content[0].text
                         )
-                        # [v6] Normalize retry output too
                         full_response = (
                             _normalize_trailing_question(
                                 full_response

@@ -25,6 +25,10 @@ Changelog:
   v1.1: MODEL_NAME constant + FORMAT_CONSTRAINT added
         Haiku 4.5 produces longer, heavily Markdown-formatted responses.
         FORMAT_CONSTRAINT addresses this at the prompt layer (preventive safety).
+  v1.2: Scope Guard threshold per-domain (DOMAIN_CONFIG) + sidebar slider
+        Top-K configurable via sidebar slider
+        Information panels (search source, original docs, category guide,
+        project overview, dev workflow) as sidebar expanders
 """
 
 import re
@@ -48,6 +52,7 @@ DOMAIN_CONFIG = {
     "SWTest": {
         "label": "🧪 ソフトウェアテスト哲学",
         "categories": ["Strategy_Design", "Technology"],
+        "threshold": 0.30,
         "anchor": (
             "ソフトウェアテスト、品質保証、テスト戦略、テストピラミッド、"
             "境界値分析、シフトレフト、テスト自動化、品質管理、"
@@ -67,6 +72,7 @@ DOMAIN_CONFIG = {
     "Singularity": {
         "label": "🚀 Tech Singularity",
         "categories": ["TECH_research"],
+        "threshold": 0.20,
         "anchor": (
             "コンピュータ科学、人工知能(AI)、半導体工学、物理学、"
             "ハードウェア、ソフトウェア開発、プログラミング、アルゴリズム、"
@@ -88,7 +94,7 @@ DOMAIN_CONFIG = {
 # Default domain
 DEFAULT_DOMAIN = "SWTest"
 
-SCOPE_THRESHOLD = 0.15
+SCOPE_THRESHOLD_DEFAULT = 0.30
 
 # Model: single-point constant for future migration
 MODEL_NAME = "claude-haiku-4-5-20251001"
@@ -227,10 +233,11 @@ def get_anchor_embedding(anchor_text):
 # Pre-hook: Scope Guard (domain-aware)
 # ==========================================
 
-def pre_hook_scope_guard(query, domain_key, threshold=SCOPE_THRESHOLD):
+def pre_hook_scope_guard(query, domain_key, threshold=None):
     """
     [DIFF-3] Domain-aware Scope Guard.
     Uses the selected domain's keywords and anchor for validation.
+    Threshold priority: explicit arg > domain config > global default.
 
     3-stage check (priority order):
       1. Domain keyword -> pass
@@ -238,6 +245,10 @@ def pre_hook_scope_guard(query, domain_key, threshold=SCOPE_THRESHOLD):
       3. Anchor vector similarity -> pass if above threshold
     """
     config = DOMAIN_CONFIG.get(domain_key, DOMAIN_CONFIG[DEFAULT_DOMAIN])
+
+    # Threshold: slider override > domain config > global default
+    if threshold is None:
+        threshold = config.get("threshold", SCOPE_THRESHOLD_DEFAULT)
 
     try:
         # Stage 1: Domain keywords (per-domain)
@@ -402,6 +413,10 @@ def main():
     if selected_domain != st.session_state.current_domain:
         st.session_state.current_domain = selected_domain
         config = DOMAIN_CONFIG[selected_domain]
+        # Reset threshold to new domain's recommended value
+        st.session_state.scope_threshold = config.get(
+            "threshold", SCOPE_THRESHOLD_DEFAULT
+        )
         st.session_state.messages.append({
             "role": "system",
             "content": (
@@ -466,6 +481,84 @@ def main():
         f"現在: **{level_labels[st.session_state.socratic_level]}**"
     )
 
+    # RAG Tuning (Threshold + Top-K)
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("🔧 検索チューニング")
+
+    current_config = DOMAIN_CONFIG[st.session_state.current_domain]
+    domain_default_th = current_config.get(
+        "threshold", SCOPE_THRESHOLD_DEFAULT
+    )
+
+    if "scope_threshold" not in st.session_state:
+        st.session_state.scope_threshold = domain_default_th
+    if "top_k" not in st.session_state:
+        st.session_state.top_k = 3
+
+    st.session_state.scope_threshold = st.sidebar.slider(
+        "Scope Guard 閾値",
+        min_value=0.10,
+        max_value=0.40,
+        value=st.session_state.scope_threshold,
+        step=0.05,
+        help=(
+            "低い→通りやすい／高い→厳しくフィルタ。"
+            f"ドメイン推奨値: {domain_default_th:.2f}"
+        ),
+    )
+
+    st.session_state.top_k = st.sidebar.slider(
+        "参照ドキュメント数 (Top-K)",
+        min_value=1,
+        max_value=5,
+        value=st.session_state.top_k,
+        step=1,
+        help="少ない→深く考える／多い→広く俯瞰する",
+    )
+
+    # Information Panels
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📖 ガイド")
+
+    with st.sidebar.expander("🔍 検索ソース選択（将来機能）"):
+        st.caption(
+            "教育アイテムの検索範囲を絞ったり広げたりすることで、"
+            "参加型の学習体験を実現します。\n\n"
+            "例: 特定の文書だけに絞って深掘りしたり、"
+            "全文書を横断して俯瞰的に学ぶことができます。"
+        )
+
+    with st.sidebar.expander("📄 原文参照（将来機能）"):
+        st.caption(
+            "AIの回答が参照した原文を直接読む機能です。\n\n"
+            "一次資料に当たる習慣は、学びの質を大きく高めます。"
+            "「答え」ではなく「根拠」を自分の目で確かめましょう。"
+        )
+
+    with st.sidebar.expander("🗺️ カテゴリ別ガイド"):
+        st.caption(
+            "**docs/knowledge_map.md** を参照すると、"
+            "登録された文書群の全体像と各文書の関連性が分かります。\n\n"
+            "どの文書がどのテーマをカバーしているか、"
+            "学習の道筋を把握するための地図です。"
+        )
+
+    with st.sidebar.expander("📋 プロジェクト概要"):
+        st.caption(
+            "**specs/spec_knowledge_map_routing.md** に"
+            "システム設計文書の履歴と構成が記載されています。\n\n"
+            "このRAGシステムがどのような文書群で構成され、"
+            "どのように進化してきたかを確認できます。"
+        )
+
+    with st.sidebar.expander("🔄 開発ワークフロー"):
+        st.caption(
+            "システム全体のアーキテクチャと処理フローです。\n\n"
+            "Pre-hook（Scope Guard）→ RAG検索 → LLM生成 → "
+            "Post-hook（Socratic Validation）の流れを理解すると、"
+            "AI nativeな学び方に近づけます。"
+        )
+
     # Clear history
     st.sidebar.markdown("---")
     if st.sidebar.button("🗑️ 会話履歴をクリア", use_container_width=True):
@@ -508,7 +601,8 @@ def main():
 
     # 1. Pre-hook: Scope Guard (domain-aware)
     is_valid, error_msg = pre_hook_scope_guard(
-        prompt, current_domain
+        prompt, current_domain,
+        threshold=st.session_state.scope_threshold,
     )
 
     if not is_valid:
@@ -535,7 +629,7 @@ def main():
         results = search_documents(
             prompt,
             target_categories=config["categories"],
-            top_k=3,
+            top_k=st.session_state.top_k,
         )
 
         if not results:

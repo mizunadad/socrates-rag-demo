@@ -37,10 +37,7 @@ STATIC_MAPPING = {
     "Management": "Management",
     "Strategy_Design": "Strategy_Design",
     "Psychology": "Psychology",
-    "gartner_2025": "gartner_2025",
-    "nikkei_bp_2025_2035": "nikkei_bp_2025_2035",
     "next_gen_power": "next_gen_power",
-    "automotive_2045": "automotive_2045",
     "Singularity_2026": "Singularity",
 }
 

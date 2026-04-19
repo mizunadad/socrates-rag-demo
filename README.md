@@ -67,6 +67,8 @@ socrates-rag-demo/
 │   └── README.md           #   プロンプト設計の解説
 ├── build_vector_db_for_NewRAG.py    # ベクトル化パイプライン（初回構築用）
 ├── build_vector_db_for_MixedRAG.py  # ベクトル化パイプライン（差分更新・除霊用）
+├── streamlit_app.py                    
+├── 03_smart_normalize_reconstruct_forSocraticRAG_v5_0.py  
 ├── requirements.txt
 ├── LICENSE
 └── README.md
@@ -183,7 +185,8 @@ if not check_password():
 - [Vol.6: 文書作成と"脱チャンク"戦略](https://zenn.dev/mizunadad/articles/04da3601fc9051)
 - [Vol.7: ベクトル化パイプライン ── 3段フォールバックの実装](https://zenn.dev/mizunadad/articles/0a0e784d2e6384)
 - [Vol.8: Streamlit UIの設計 ── 対話を「指導」に変えるUI設計](https://zenn.dev/mizunadad/articles/be2f4c7cb2690e)
-- Vol.9: 動かして初めて分かること ── シリーズ総括とソクラテスの現在地
+- [Vol.9: 動かして初めて分かること ── シリーズ総括とソクラテスの現在地](https://zenn.dev/mizunadad/articles/59dc3b408abd80)
+
 
 ## ライセンス
 
